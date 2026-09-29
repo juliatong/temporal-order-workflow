@@ -1,0 +1,8 @@
+target/
+.idea/
+*.iml
+.DS_Store
+
+# Local only: interview material and personal tool settings
+SA Technical Interview Handout.docx
+.claude/
