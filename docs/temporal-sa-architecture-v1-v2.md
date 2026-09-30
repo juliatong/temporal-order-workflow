@@ -5,7 +5,7 @@
 **Companion files:** `work-journal.md`, `architecture-v1.svg`, `architecture-v2.svg`
 
 
-## 2. Role of This Architecture in the Presentation
+## 1. Role of This Architecture in the Presentation
 
 - The **working canvas** for the cut-ins: an event-driven, Kafka-based order system, scoped to the order core.
 - **v1 and v2 are two states of the same diagram.** During the cut-ins, each amber patch appears at the moment its incident happens (evolution framing).
@@ -14,7 +14,7 @@
 
 ---
 
-## 3. v1 — As First Shipped
+## 2. v1 — As First Shipped
 
 ![Architecture v1](architecture-v1.svg)
 
@@ -28,7 +28,7 @@
 
 ---
 
-## 4. v2 — After Incidents
+## 3. v2 — After Incidents
 
 ![Architecture v2](architecture-v2.svg)
 
@@ -63,7 +63,7 @@ v2 is kept unchanged for comparison. v2′ = v2 + the path changes batched durin
 
 **Both directions hold:** every addition traces to a cut, and every cut's delta appears (drawn or as logic). ✅
 
-## 4″. The Temporal Version (the "after")
+## 4. The Temporal Version (the "after")
 
 ![Architecture — Temporal version](architecture-temporal.svg)
 
@@ -184,6 +184,8 @@ What the code implements. Same services and third parties as v1, same positions,
 2. Concrete cut-ins on v1; each produces a v2 delta — `cut-ins.md` ✅
 3. v2′ = v1 + deltas, one consistency pass, locked — §4′ ✅
 4. The Temporal version, test-first: hero flow, then one increment per cut-in — the code and the README demos ✅
+
+
 
 ### Changelog
 | Rev | Change |
