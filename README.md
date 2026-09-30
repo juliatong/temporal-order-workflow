@@ -55,6 +55,20 @@ temporal workflow signal -w order-<id> --name approveReview
 
 Downstream state (holds, reservations, bookings): `curl -d '{}' localhost:8081/state`
 
+## Cut-ins at a glance
+
+Each demo below is one incident from the event-driven system, answered by one Temporal value (numbering from [`work-journal.md`](docs/work-journal.md)):
+
+| Cut | Problem | Temporal value |
+|---|---|---|
+| 1 | Partial failure, nobody undoes | #2 Saga (built on #1) |
+| 2 | Process dies mid-flow; the order is stuck or lost | #1 Durable execution |
+| 3 | Gateway blips: lost sales or double charges | #7 Retries (partial fit: also needs an idempotency key) |
+| 4 | Cancel races fulfillment | #4 Signals / Queries / Updates |
+| 5 | Review deadline missed | #3 Durable timers |
+| 6 | Checkout slow or dishonest | #4b Update-With-Start |
+| 7 | "What happened to order #123?" | #5 Visibility |
+
 ## Demo: a late failure is rolled back (cut 1)
 
 The carrier rejects any address containing `INVALID`, which is a permanent failure. The workflow fails fast and runs its compensations in reverse order: void the card hold, then release the stock.

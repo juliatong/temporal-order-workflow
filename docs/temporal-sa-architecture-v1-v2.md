@@ -4,72 +4,6 @@
 **Status:** 🔒 Locked · rev 23 on 2026-09-29 · v2′ locked · v1 designed · v1 scope locked
 **Companion files:** `work-journal.md`, `architecture-v1.svg`, `architecture-v2.svg`
 
-### Changelog
-| Rev | Change |
-|---|---|
-| 1 | v1/v2 locked (Mermaid diagrams) |
-| 2 | Diagrams replaced with the exact reviewed SVGs (single source of truth; Mermaid removed). Cut-in index added. **Finding 1:** v1 authorizes the card asynchronously at step 4 — that *is* the cut 6 incident; step 4 renamed "Authorize card". **Finding 2:** dual write exists in every producing service → v2 has an outbox per producing service. Retry + DLQ moved above Kafka so every consumer visibly reads from Kafka. |
-| 3 | **Finding 3:** Payment, Fraud review and Shipping had no DB, yet L8 (outbox per producing service), design item E (write-then-publish) and D (payments, review cases, shipments) all assume one. Added Payment DB, Fraud DB, Shipping DB; all four service DBs now sit in one row directly under their services (Inventory DB moved out of the third-party row). Applied to **both** v1 and v2 so v2 − v1 still contains only cut-in patches. |
-| 4 | **Cut 3 re-homed (option B).** Cut 3 was three incidents. Duplicates are cut 2's patch tax (the outbox relay is at-least-once; webhooks redeliver), so the **inbox moves to cut 2**. Cut 3 is now one trigger — the gateway blips at step 4 — with Problem 3's two halves: retry in place stalls the partition (lost sales → retry topics + DLQ; poison pill is the permanent case) and a timeout retry places a second hold (→ idempotency keys). Chain kept: the inbox can't protect the gateway call → leads to cut 3. |
-| 5 | **Cut 7 vs. envelope.** v1 already stamps the order ID on every event (partition key), so a separate correlation ID in v1 was redundant and adding one in v2 would be a strawman. Removed from A; order ID is the correlation key. Cut 7's patch is now distributed tracing + an order timeline view. Patch tax: tracing shows what happened, not the event never published or what the order is waiting on now. Tracing backend treated as org-provided, not drawn (amber count stays 13). |
-| 6 | **Cancel added to v1.** Cut 4 is a cancel racing fulfillment, but v1 had no cancel. Customer box label → "1 · order, status, cancel" (box widened to fit) in v1 and v2; hero flow gets a "Cancel order (anytime before shipment)" row. Who consumes `OrderCancelled` in v1 is decided in B (event catalog). |
-| 7 | **Shipping trigger (L10).** Fraud screens every order and always emits a decision; Shipping triggers only on `ReviewApproved`. Hero flow step 5 renamed "Fraud screening". **v1 scope locked** (§9) after checking every cut-in against v1: findings 1–5 of the cut-in check resolved in revs 3–7 and the journal (cut 1/2/3 cost wording). |
-| 8 | **B designed** (`v1-system-design.md`). `StockUnavailable` dropped from §9.2 B — no cut uses it. `ReviewRejected` kept (L10: Fraud always emits a decision). `OrderCancelled` is consumed by Inventory, Payment and Shipping, each reacting without checking current state (the cut 4 race). |
-| 9 | **D and A/C/E designed.** Cut 3 now uses D (payment row `AUTH_PENDING`, one auth ID → orphaned first hold). **Finding 4:** with commit-after-process, the dual write loses events only at the API edge; event-driven producers get redelivery and repeated side effects instead. L8 rationale and the outbox catalog row reworded; v2 unchanged (outbox + inbox cover both). Envelope: `version` dropped (no cut uses it); event ID generated at publish time. |
-| 10 | **F designed.** Cut 3's poison pill made concrete: `capture` after a lapsed hold (cut 5) returns permanent `HOLD_EXPIRED`; v1 retries every error in place → partition stuck, parcel ships unpaid. Webhooks kept minimal (drawn in the architecture; L5). Carrier `cancelBooking` exists but is never called in v1. Carrier timeout (possible double booking) not modelled — no cut uses it; parked as a discussion point. |
-| 11 | **G designed.** Both write APIs answer synchronously with a promise the async system can't keep (`201 Order placed`, `200 Order cancelled`) — ties cuts 4 and 6. Cut 6's "an hour later" is explained by consumer lag / cut 3's stall, not a fixed delay. No idempotency on `POST /orders` — no cut uses it; parked as a discussion point. |
-| 12 | **H designed; trace check.** Break 2 fixed: in cut 4 the cancel is published while Shipping is mid-call, so it lands before `ShipmentBooked` → Payment voids first, then capture fails with permanent `AUTH_VOIDED`, retried forever → parcel ships unpaid, partition stuck. Journal Problem 4 cost updated. Break 1 (cut 2 cost at the API edge) open. |
-| 13 | **Break 1 fixed; v1 designed.** E now uses a fire-and-forget `send()` shared by every producer (client default). A hard kill before the buffer flushes loses the event at the API edge (customer holds `201`) and mid-flow (offset committed). Partly reverses Finding 4 (rev 9): Finding 4 held only under an awaited-ack setup that was assumed, not decided. L8 and the outbox catalog row reworded; journal Problem 2 now "a pod is OOM-killed or a node is lost at peak". Trace check passes: hero flow 1–6 and all 7 cuts. |
-| 14 | **Cut 1 concrete** (`cut-ins.md`). Patch changed from a command chain (`PaymentVoidRequested` → `StockReleaseRequested`, which needs an orchestrator — rejected in L10) to pure choreography: each resource holder subscribes to each failure event. v2 adds `PaymentVoided`, `StockReleased`. |
-| 15 | **Cut 2 concrete.** Checklist resolved: outboxes wire to the CDC relay and service ↔ Kafka arrows become consume-only (redraw batched to the v2 pass); Order service gets no inbox (a status projection tolerates duplicates; out-of-order overwrites are cut 4's row versioning — amber stays 13); sweeper reads the Orders DB (status + updated at) and re-drives by re-publishing (new `eventId` → inbox can't dedup). |
-| 16 | **Cut 3 concrete.** Error classification added to the retry + DLQ patch (logic). Patch tax: retry topics break per-order ordering → leads to cut 4; cut 4's incident stays the v1 mid-call race. Journal Problem 3: orders stall rather than fail outright. |
-| 17 | **Cut 4 concrete.** Patch refined: a flag check alone is still check-then-act; the race-free piece is a compare-and-set at the point of no return (booking). Checklist #3: consumers check via sync calls to the Order service (a local copy of `OrderCancelled` lags like the projection) — sync arrows Inventory/Payment/Shipping → Order service, redraw in the v2 pass; amber stays 13. v2 adds status `FULFILLING`. Temporal policy: cancel rejected once booking has started. |
-| 18 | **Cut 5 concrete.** Timeout policy: auto-reject at 24h (fraud-safe; reuses cut 1 compensation); no escalation step (no cut needs it). Sweeper reads the Fraud DB and calls Fraud's reject endpoint (Fraud keeps ownership) — arrows batched to the v2 pass. `ReviewRejected` gains `mode: timeout`. Checklist #4 and #6 closed (24h ≪ ~7-day hold). |
-| 19 | **Cut 6 concrete; checklist #5 closed.** Patch: synchronous reserve + authorize at checkout (`201` / `402`), chosen over "202 + polling" (the spinner would read the lagging projection). v2 event flow: Inventory stops consuming `OrderPlaced`, Payment stops consuming `StockReserved`; sync arrows Order service → Inventory, Payment (redraw in v2 pass). Client idempotency key on `POST /orders` — un-parked, since checkout timeouts make retries real. All 6 carried-over checklist items resolved. |
-| 20 | **Cut 7 concrete; all cut-ins concrete.** Cut 7 traced on the patched system (v1 + cuts 1–6) because its cost grows with every patch. Order timeline lives in the Order service (`order_events` table in the Orders DB) — amber stays 13. Temporal side: custom `OrderStatus` search attribute. |
-| 21 | **v2′ drawn** (`architecture-v2-prime.svg`; v2 kept for comparison). All batched path changes applied; v2′ − v1 = cut-ins re-checked in both directions (§4′). Proposed "sweeper reaches Fraud through its API only" — declined; cut 5's decision stands. |
-| 22 | **v2′ locked.** Sweeper → Fraud DB read path drawn (lane between the tag row and the DB row; canvas +14px). v2′ − v1 = cut-ins holds in both directions (§4′). |
-| 23 | **"After" diagram added** (`architecture-temporal.svg`, §4″): the Temporal version in the same layout as v1/v2′. Temporal Service takes the Orders DB's place; Kafka shown only as optional fan-out; amber count 0. Linked from the README. |
-
----
-
-## 1. Cut-in Index
-
-### What is a cut-in?
-
-The presentation first walks through the **hero flow** — the happy path of one order, with nothing going wrong. A **cut-in** is a moment where the story jumps to a specific step of that flow and shows what breaks there. Each cut-in follows the same beat: **incident → the patch the team builds → why that patch breaks or adds cost → leads to the next cut-in.** The patches accumulate on the architecture, turning v1 into v2. Temporal is not mentioned until all cut-ins are told.
-
-### The hero flow (happy path)
-
-| Step | What happens | Performed by |
-|---|---|---|
-| 1 | Place order | Customer → Order service |
-| 2 | Record order | Order service + Orders DB |
-| 3 | Reserve stock | Inventory |
-| 4 | Authorize card | Payment → Card gateway |
-| 5 | Fraud screening *(every order: auto-approve low-value; analyst reviews high-value)* | Fraud review ← Ops analyst |
-| 6 | Book shipment, then capture payment | Shipping → Carrier API; Payment |
-| 7 | Notify customer | Notification → Email/SMS |
-| — | Status check *(anytime, read-only)* | Customer → Order service |
-| — | Cancel order *(anytime before shipment, customer-initiated)* | Customer → Order service |
-
-### The index
-
-The index is **locked**. The narrative (incident → why the patch breaks → next cut) is **pending re-derivation** after the v1 system design, because it depends on v1's precise details (event names, tables, commit timing).
-
-| Cut | Problem | Cost rank | Hero flow step | v2 patch | Narrative |
-|---|---|---|---|---|---|
-| **1** | Partial failure: shipment fails after card authorized and stock reserved | 1 | 6. Book shipment | Choreographed compensation: Payment voids on `ReviewRejected`/`ShipmentFailed`; Inventory releases on `PaymentDeclined`/`ReviewRejected`/`ShipmentFailed`; results published as `PaymentVoided`/`StockReleased` | ✅ `cut-ins.md` |
-| **2** | Crash mid-flow: DB write committed, event never published (dual write); orders stall | 2 | 2. Record order (and every producing service) | Outbox per producing service + CDC relay; inbox per consumer (patch tax: at-least-once delivery); sweeper for stuck orders | ✅ `cut-ins.md` |
-| **3** | Gateway blips at step 4: retry in place stalls the partition (poison pill: `capture` after the hold expired returns a permanent `HOLD_EXPIRED`, retried forever — partition stuck, parcel ships unpaid; links cut 5 → cut 3); timeout retry places a second hold | 3 | 4. Authorize card | Retry topics + DLQ; idempotency keys to gateway | ✅ `cut-ins.md` |
-| **4** | Cancel races fulfillment; status drifts from reality | 4 | 5. Fraud screening + status check | Fulfillment gate (compare-and-set `APPROVED → FULFILLING` on a row version, shared with the cancel API) + active-order checks (sync calls to Order service) + projection transition rules | ✅ `cut-ins.md` |
-| **5** | Time rules missed: manual review never times out | 5 | 5. Fraud screening (manual queue) | Sweeper review-deadline job: reads Fraud DB, `PENDING` > 24h → Fraud's reject endpoint → `ReviewRejected (mode: timeout)` → cut 1 compensation; compare-and-set on the case | ✅ `cut-ins.md` |
-| **6** | Checkout honesty: "order placed", then "payment declined" later — seconds normally, hours when consumers lag or a partition is stalled (cut 3) | 6 | 1. Place order | Synchronous checkout: Order service calls Inventory `reserve` then Payment `authorize` → `201 Order placed` or `402 Card declined`; client idempotency key on `POST /orders` | ✅ `cut-ins.md` |
-| **7** | Nobody can answer "what happened to order #123?" | 7 | Whole thread | Distributed tracing (trace context propagated in Kafka headers) + order timeline view | ✅ `cut-ins.md` |
-
-Cut-ins are presented in **business-cost order**, not flow order. The flow is a shared map; the story can cut in anywhere. Cost order also matches the patch chain and makes the story safe to truncate.
-
----
 
 ## 2. Role of This Architecture in the Presentation
 
@@ -250,3 +184,32 @@ What the code implements. Same services and third parties as v1, same positions,
 2. Concrete cut-ins on v1; each produces a v2 delta — `cut-ins.md` ✅
 3. v2′ = v1 + deltas, one consistency pass, locked — §4′ ✅
 4. The Temporal version, test-first: hero flow, then one increment per cut-in — the code and the README demos ✅
+
+### Changelog
+| Rev | Change |
+|---|---|
+| 1 | v1/v2 locked (Mermaid diagrams) |
+| 2 | Diagrams replaced with the exact reviewed SVGs (single source of truth; Mermaid removed). Cut-in index added. **Finding 1:** v1 authorizes the card asynchronously at step 4 — that *is* the cut 6 incident; step 4 renamed "Authorize card". **Finding 2:** dual write exists in every producing service → v2 has an outbox per producing service. Retry + DLQ moved above Kafka so every consumer visibly reads from Kafka. |
+| 3 | **Finding 3:** Payment, Fraud review and Shipping had no DB, yet L8 (outbox per producing service), design item E (write-then-publish) and D (payments, review cases, shipments) all assume one. Added Payment DB, Fraud DB, Shipping DB; all four service DBs now sit in one row directly under their services (Inventory DB moved out of the third-party row). Applied to **both** v1 and v2 so v2 − v1 still contains only cut-in patches. |
+| 4 | **Cut 3 re-homed (option B).** Cut 3 was three incidents. Duplicates are cut 2's patch tax (the outbox relay is at-least-once; webhooks redeliver), so the **inbox moves to cut 2**. Cut 3 is now one trigger — the gateway blips at step 4 — with Problem 3's two halves: retry in place stalls the partition (lost sales → retry topics + DLQ; poison pill is the permanent case) and a timeout retry places a second hold (→ idempotency keys). Chain kept: the inbox can't protect the gateway call → leads to cut 3. |
+| 5 | **Cut 7 vs. envelope.** v1 already stamps the order ID on every event (partition key), so a separate correlation ID in v1 was redundant and adding one in v2 would be a strawman. Removed from A; order ID is the correlation key. Cut 7's patch is now distributed tracing + an order timeline view. Patch tax: tracing shows what happened, not the event never published or what the order is waiting on now. Tracing backend treated as org-provided, not drawn (amber count stays 13). |
+| 6 | **Cancel added to v1.** Cut 4 is a cancel racing fulfillment, but v1 had no cancel. Customer box label → "1 · order, status, cancel" (box widened to fit) in v1 and v2; hero flow gets a "Cancel order (anytime before shipment)" row. Who consumes `OrderCancelled` in v1 is decided in B (event catalog). |
+| 7 | **Shipping trigger (L10).** Fraud screens every order and always emits a decision; Shipping triggers only on `ReviewApproved`. Hero flow step 5 renamed "Fraud screening". **v1 scope locked** (§9) after checking every cut-in against v1: findings 1–5 of the cut-in check resolved in revs 3–7 and the journal (cut 1/2/3 cost wording). |
+| 8 | **B designed** (`v1-system-design.md`). `StockUnavailable` dropped from §9.2 B — no cut uses it. `ReviewRejected` kept (L10: Fraud always emits a decision). `OrderCancelled` is consumed by Inventory, Payment and Shipping, each reacting without checking current state (the cut 4 race). |
+| 9 | **D and A/C/E designed.** Cut 3 now uses D (payment row `AUTH_PENDING`, one auth ID → orphaned first hold). **Finding 4:** with commit-after-process, the dual write loses events only at the API edge; event-driven producers get redelivery and repeated side effects instead. L8 rationale and the outbox catalog row reworded; v2 unchanged (outbox + inbox cover both). Envelope: `version` dropped (no cut uses it); event ID generated at publish time. |
+| 10 | **F designed.** Cut 3's poison pill made concrete: `capture` after a lapsed hold (cut 5) returns permanent `HOLD_EXPIRED`; v1 retries every error in place → partition stuck, parcel ships unpaid. Webhooks kept minimal (drawn in the architecture; L5). Carrier `cancelBooking` exists but is never called in v1. Carrier timeout (possible double booking) not modelled — no cut uses it; parked as a discussion point. |
+| 11 | **G designed.** Both write APIs answer synchronously with a promise the async system can't keep (`201 Order placed`, `200 Order cancelled`) — ties cuts 4 and 6. Cut 6's "an hour later" is explained by consumer lag / cut 3's stall, not a fixed delay. No idempotency on `POST /orders` — no cut uses it; parked as a discussion point. |
+| 12 | **H designed; trace check.** Break 2 fixed: in cut 4 the cancel is published while Shipping is mid-call, so it lands before `ShipmentBooked` → Payment voids first, then capture fails with permanent `AUTH_VOIDED`, retried forever → parcel ships unpaid, partition stuck. Journal Problem 4 cost updated. Break 1 (cut 2 cost at the API edge) open. |
+| 13 | **Break 1 fixed; v1 designed.** E now uses a fire-and-forget `send()` shared by every producer (client default). A hard kill before the buffer flushes loses the event at the API edge (customer holds `201`) and mid-flow (offset committed). Partly reverses Finding 4 (rev 9): Finding 4 held only under an awaited-ack setup that was assumed, not decided. L8 and the outbox catalog row reworded; journal Problem 2 now "a pod is OOM-killed or a node is lost at peak". Trace check passes: hero flow 1–6 and all 7 cuts. |
+| 14 | **Cut 1 concrete** (`cut-ins.md`). Patch changed from a command chain (`PaymentVoidRequested` → `StockReleaseRequested`, which needs an orchestrator — rejected in L10) to pure choreography: each resource holder subscribes to each failure event. v2 adds `PaymentVoided`, `StockReleased`. |
+| 15 | **Cut 2 concrete.** Checklist resolved: outboxes wire to the CDC relay and service ↔ Kafka arrows become consume-only (redraw batched to the v2 pass); Order service gets no inbox (a status projection tolerates duplicates; out-of-order overwrites are cut 4's row versioning — amber stays 13); sweeper reads the Orders DB (status + updated at) and re-drives by re-publishing (new `eventId` → inbox can't dedup). |
+| 16 | **Cut 3 concrete.** Error classification added to the retry + DLQ patch (logic). Patch tax: retry topics break per-order ordering → leads to cut 4; cut 4's incident stays the v1 mid-call race. Journal Problem 3: orders stall rather than fail outright. |
+| 17 | **Cut 4 concrete.** Patch refined: a flag check alone is still check-then-act; the race-free piece is a compare-and-set at the point of no return (booking). Checklist #3: consumers check via sync calls to the Order service (a local copy of `OrderCancelled` lags like the projection) — sync arrows Inventory/Payment/Shipping → Order service, redraw in the v2 pass; amber stays 13. v2 adds status `FULFILLING`. Temporal policy: cancel rejected once booking has started. |
+| 18 | **Cut 5 concrete.** Timeout policy: auto-reject at 24h (fraud-safe; reuses cut 1 compensation); no escalation step (no cut needs it). Sweeper reads the Fraud DB and calls Fraud's reject endpoint (Fraud keeps ownership) — arrows batched to the v2 pass. `ReviewRejected` gains `mode: timeout`. Checklist #4 and #6 closed (24h ≪ ~7-day hold). |
+| 19 | **Cut 6 concrete; checklist #5 closed.** Patch: synchronous reserve + authorize at checkout (`201` / `402`), chosen over "202 + polling" (the spinner would read the lagging projection). v2 event flow: Inventory stops consuming `OrderPlaced`, Payment stops consuming `StockReserved`; sync arrows Order service → Inventory, Payment (redraw in v2 pass). Client idempotency key on `POST /orders` — un-parked, since checkout timeouts make retries real. All 6 carried-over checklist items resolved. |
+| 20 | **Cut 7 concrete; all cut-ins concrete.** Cut 7 traced on the patched system (v1 + cuts 1–6) because its cost grows with every patch. Order timeline lives in the Order service (`order_events` table in the Orders DB) — amber stays 13. Temporal side: custom `OrderStatus` search attribute. |
+| 21 | **v2′ drawn** (`architecture-v2-prime.svg`; v2 kept for comparison). All batched path changes applied; v2′ − v1 = cut-ins re-checked in both directions (§4′). Proposed "sweeper reaches Fraud through its API only" — declined; cut 5's decision stands. |
+| 22 | **v2′ locked.** Sweeper → Fraud DB read path drawn (lane between the tag row and the DB row; canvas +14px). v2′ − v1 = cut-ins holds in both directions (§4′). |
+| 23 | **"After" diagram added** (`architecture-temporal.svg`, §4″): the Temporal version in the same layout as v1/v2′. Temporal Service takes the Orders DB's place; Kafka shown only as optional fan-out; amber count 0. Linked from the README. |
+
+---

@@ -12,6 +12,7 @@ public enum OrderStatus {
     APPROVED,
     SHIPMENT_BOOKED,
     CAPTURED,
+    ROLLING_BACK, // undoing completed steps; ends as one of the failure statuses below
     REVIEW_REJECTED,
     REVIEW_TIMED_OUT,
     SHIPMENT_FAILED,

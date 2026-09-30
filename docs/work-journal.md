@@ -6,23 +6,7 @@
 
 ---
 
-## 1. Decisions Log
-
-| # | Decision | Rationale |
-|---|---|---|
-| D1 | Use case: **E-commerce order** | Universally understood; saga story is compelling; maps to the most differentiating Temporal values. Must differentiate through depth (saga rigor, idempotency, live failure demo), not breadth. |
-| D2 | **Prep runs values-first; presentation runs problems-first** | No real customer here — the audience is a Temporal SA evaluating Temporal understanding, so values are the fixed target. The story must still feel organic: the customer has the pain, Temporal happens to be the answer. |
-| D3 | **Guardrail:** every selected problem must stand on its own without Temporal in the sentence | Prevents reverse-engineering from showing. "Customer charged for nothing" is a problem; "we lack durable execution" is a feature wearing a problem costume. |
-| D4 | Values are ranked by **differentiation**; problems are ranked by **business cost** | "Well known" and "notorious" are proxies. Differentiation = hard to get from what the customer already has. Business cost = money, trust, engineering hours. |
-| D5 | Use **two comparison frames**: vs. homegrown and vs. other durable execution platforms | Durable execution is no longer unique (AWS Lambda durable functions, Step Functions, Inngest, Restate, etc.). Homegrown frame drives the demo; platform frame drives the Q&A. |
-| D6 | Showcase **3–4 matches**, not a complete mapping | Each match = one story beat + one demo moment. More dilutes the message and the time budget. |
-| D7 | Problem 2 (process dies mid-flow) is **not its own beat** — it is the stress test applied to every beat | Every other problem has a crash variant. "Kill the worker" proves each guarantee holds, instead of being a one-off trick. |
-| D8 | *Clarifies D7 (2026-09-29):* in the **v1 → v2 story**, the crash **is** its own incident — cut 2, the dual write that loses an event. In the **Temporal demo**, D7 holds: "kill the worker" is applied across beats (cuts 1, 2, 5). | The cut index (architecture doc) made cut 2 a beat of its own; the Kafka system needs a specific mechanism (outbox, CDC) to explain, while Temporal's answer to it is the same in every beat. |
-| D9 | *Clarifies D6 (2026-09-29):* D6 is about the **presentation**. The **build** covers all 7 cut-ins, in business-cost order, so the story can stop after any cut. | Building all 7 cost little once v1 was designed, and it lets a walkthrough follow the reviewer's questions. |
-
----
-
-## 2. The Process
+## 1. The Process
 
 1. List Temporal's values and rank them by differentiation. ✅
 2. For each top value, find the order system problem it solves; rank by business cost; apply the guardrail. ✅
@@ -43,7 +27,7 @@ Problem (business cost)
 
 ---
 
-## 3. Step 1 — Temporal's Values, Ranked by Differentiation (revised)
+## 2. Step 1 — Temporal's Values, Ranked by Differentiation (revised)
 
 **Tier key:** Tier 1 = the demo is built on it. Tier 2 = appears naturally inside the demo. Tier 3 = invisible in a local demo; core answer to "why Temporal over Step Functions / Lambda durable functions?"
 
@@ -69,7 +53,7 @@ Problem (business cost)
 
 ---
 
-## 4. Step 2 — Order System Problems, Ranked by Business Cost
+## 3. Step 2 — Order System Problems, Ranked by Business Cost
 
 | Rank | Problem (stands alone) | Concrete scenario | Business cost | Value(s) it maps to | Guardrail |
 |---|---|---|---|---|---|
@@ -93,7 +77,7 @@ Problem (business cost)
 
 ---
 
-## 5. How the Problems Fit Together (corrected diagram)
+## 4. How the Problems Fit Together (corrected diagram)
 
 ```
         Problem 2: process dies mid-flow  ◄── applies to every node below
@@ -124,3 +108,18 @@ Problem (business cost)
 
 ---
 
+## 5. Decisions Log
+
+| # | Decision | Rationale |
+|---|---|---|
+| D1 | Use case: **E-commerce order** | Universally understood; saga story is compelling; maps to the most differentiating Temporal values. Must differentiate through depth (saga rigor, idempotency, live failure demo), not breadth. |
+| D2 | **Prep runs values-first; presentation runs problems-first** | No real customer here — the audience is a Temporal SA evaluating Temporal understanding, so values are the fixed target. The story must still feel organic: the customer has the pain, Temporal happens to be the answer. |
+| D3 | **Guardrail:** every selected problem must stand on its own without Temporal in the sentence | Prevents reverse-engineering from showing. "Customer charged for nothing" is a problem; "we lack durable execution" is a feature wearing a problem costume. |
+| D4 | Values are ranked by **differentiation**; problems are ranked by **business cost** | "Well known" and "notorious" are proxies. Differentiation = hard to get from what the customer already has. Business cost = money, trust, engineering hours. |
+| D5 | Use **two comparison frames**: vs. homegrown and vs. other durable execution platforms | Durable execution is no longer unique (AWS Lambda durable functions, Step Functions, Inngest, Restate, etc.). Homegrown frame drives the demo; platform frame drives the Q&A. |
+| D6 | Showcase **3–4 matches**, not a complete mapping | Each match = one story beat + one demo moment. More dilutes the message and the time budget. |
+| D7 | Problem 2 (process dies mid-flow) is **not its own beat** — it is the stress test applied to every beat | Every other problem has a crash variant. "Kill the worker" proves each guarantee holds, instead of being a one-off trick. |
+| D8 | *Clarifies D7 (2026-09-29):* in the **v1 → v2 story**, the crash **is** its own incident — cut 2, the dual write that loses an event. In the **Temporal demo**, D7 holds: "kill the worker" is applied across beats (cuts 1, 2, 5). | The cut index (architecture doc) made cut 2 a beat of its own; the Kafka system needs a specific mechanism (outbox, CDC) to explain, while Temporal's answer to it is the same in every beat. |
+| D9 | *Clarifies D6 (2026-09-29):* D6 is about the **presentation**. The **build** covers all 7 cut-ins, in business-cost order, so the story can stop after any cut. | Building all 7 cost little once v1 was designed, and it lets a walkthrough follow the reviewer's questions. |
+
+---

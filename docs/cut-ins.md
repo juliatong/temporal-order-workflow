@@ -5,24 +5,41 @@
 **Per cut:** incident (traced on v1) → patch (v2 delta) → patch tax (→ next cut) → Temporal answer → demo moment.
 **After cut 7:** resolve the carried-over v2 checklist → v2 consistency pass → lock v2 → code track.
 
-### Carried-over v2 checklist
+## 1. Cut-in Index
 
-| # | Item | Status |
+### What is a cut-in?
+
+The presentation first walks through the **hero flow** — the happy path of one order, with nothing going wrong. A **cut-in** is a moment where the story jumps to a specific step of that flow and shows what breaks there. Each cut-in follows the same beat: **incident → the patch the team builds → why that patch breaks or adds cost → leads to the next cut-in.** The patches accumulate on the architecture, turning v1 into v2. Temporal is not mentioned until all cut-ins are told.
+
+### The hero flow (happy path)
+
+| Step | What happens | Performed by |
 |---|---|---|
-| 1 | Wire all 5 outboxes to the CDC relay; service ↔ Kafka arrows consume-only | ✅ Decided in cut 2 · redraw in v2 pass |
-| 2 | Order service consumes but has no inbox | ✅ Cut 2: no inbox — projection tolerates duplicates; ordering is cut 4 |
-| 3 | Cut 4: how consumers check the cancel flag | ✅ Cut 4: sync calls to the Order service + fulfillment gate · redraw in v2 pass |
-| 4 | Sweeper read path | ✅ Cut 2: Orders DB · cut 5: Fraud DB + call to Fraud reject endpoint |
-| 5 | Cut 6 patch | ✅ Cut 6: synchronous reserve + authorize at checkout |
-| 6 | Cut 5's sweeper deadline shorter than the hold expiry | ✅ Cut 5: 24h deadline vs. ~7-day hold |
+| 1 | Place order | Customer → Order service |
+| 2 | Record order | Order service + Orders DB |
+| 3 | Reserve stock | Inventory |
+| 4 | Authorize card | Payment → Card gateway |
+| 5 | Fraud screening *(every order: auto-approve low-value; analyst reviews high-value)* | Fraud review ← Ops analyst |
+| 6 | Book shipment, then capture payment | Shipping → Carrier API; Payment |
+| 7 | Notify customer | Notification → Email/SMS |
+| — | Status check *(anytime, read-only)* | Customer → Order service |
+| — | Cancel order *(anytime before shipment, customer-initiated)* | Customer → Order service |
 
-### Code-track notes (collected from demo moments)
+### The index
 
-- Mock gateway with modes: 503 window, approve-then-timeout with an idempotency store (hold count), `HOLD_EXPIRED` on capture. (Cut 3)
-- Activities with a configurable sleep to open a kill window or a cancel window. (Cuts 1, 2, 4)
-- Configurable review deadline (30s for the live demo, 24h in the time-skipping test); analyst approve as a signal. (Cut 5)
-- Checkout client that calls Update-With-Start and can resend the same order ID; mock gateway card that always declines. (Cut 6)
-- Custom search attribute `OrderStatus`, upserted as the workflow moves (also answers status when no worker is running). (Cut 7)
+The index is **locked**. The narrative (incident → why the patch breaks → next cut) is **pending re-derivation** after the v1 system design, because it depends on v1's precise details (event names, tables, commit timing).
+
+| Cut | Problem | Cost rank | Hero flow step | v2 patch | Narrative |
+|---|---|---|---|---|---|
+| **1** | Partial failure: shipment fails after card authorized and stock reserved | 1 | 6. Book shipment | Choreographed compensation: Payment voids on `ReviewRejected`/`ShipmentFailed`; Inventory releases on `PaymentDeclined`/`ReviewRejected`/`ShipmentFailed`; results published as `PaymentVoided`/`StockReleased` | ✅ `cut-ins.md` |
+| **2** | Crash mid-flow: DB write committed, event never published (dual write); orders stall | 2 | 2. Record order (and every producing service) | Outbox per producing service + CDC relay; inbox per consumer (patch tax: at-least-once delivery); sweeper for stuck orders | ✅ `cut-ins.md` |
+| **3** | Gateway blips at step 4: retry in place stalls the partition (poison pill: `capture` after the hold expired returns a permanent `HOLD_EXPIRED`, retried forever — partition stuck, parcel ships unpaid; links cut 5 → cut 3); timeout retry places a second hold | 3 | 4. Authorize card | Retry topics + DLQ; idempotency keys to gateway | ✅ `cut-ins.md` |
+| **4** | Cancel races fulfillment; status drifts from reality | 4 | 5. Fraud screening + status check | Fulfillment gate (compare-and-set `APPROVED → FULFILLING` on a row version, shared with the cancel API) + active-order checks (sync calls to Order service) + projection transition rules | ✅ `cut-ins.md` |
+| **5** | Time rules missed: manual review never times out | 5 | 5. Fraud screening (manual queue) | Sweeper review-deadline job: reads Fraud DB, `PENDING` > 24h → Fraud's reject endpoint → `ReviewRejected (mode: timeout)` → cut 1 compensation; compare-and-set on the case | ✅ `cut-ins.md` |
+| **6** | Checkout honesty: "order placed", then "payment declined" later — seconds normally, hours when consumers lag or a partition is stalled (cut 3) | 6 | 1. Place order | Synchronous checkout: Order service calls Inventory `reserve` then Payment `authorize` → `201 Order placed` or `402 Card declined`; client idempotency key on `POST /orders` | ✅ `cut-ins.md` |
+| **7** | Nobody can answer "what happened to order #123?" | 7 | Whole thread | Distributed tracing (trace context propagated in Kafka headers) + order timeline view | ✅ `cut-ins.md` |
+
+Cut-ins are presented in **business-cost order**, not flow order. The flow is a shared map; the story can cut in anywhere. Cost order also matches the patch chain and makes the story safe to truncate.
 
 ---
 
@@ -404,3 +421,25 @@ A customer writes: "I was told my order was placed three days ago. My card shows
 ### v2 delta
 
 Tracing (org-provided, not drawn). `order_events` table + timeline API in the Order service. No new amber component.
+
+---
+
+### Carried-over v2 checklist
+
+| # | Item | Status |
+|---|---|---|
+| 1 | Wire all 5 outboxes to the CDC relay; service ↔ Kafka arrows consume-only | ✅ Decided in cut 2 · redraw in v2 pass |
+| 2 | Order service consumes but has no inbox | ✅ Cut 2: no inbox — projection tolerates duplicates; ordering is cut 4 |
+| 3 | Cut 4: how consumers check the cancel flag | ✅ Cut 4: sync calls to the Order service + fulfillment gate · redraw in v2 pass |
+| 4 | Sweeper read path | ✅ Cut 2: Orders DB · cut 5: Fraud DB + call to Fraud reject endpoint |
+| 5 | Cut 6 patch | ✅ Cut 6: synchronous reserve + authorize at checkout |
+| 6 | Cut 5's sweeper deadline shorter than the hold expiry | ✅ Cut 5: 24h deadline vs. ~7-day hold |
+
+### Code-track notes (collected from demo moments)
+
+- Mock gateway with modes: 503 window, approve-then-timeout with an idempotency store (hold count), `HOLD_EXPIRED` on capture. (Cut 3)
+- Activities with a configurable sleep to open a kill window or a cancel window. (Cuts 1, 2, 4)
+- Configurable review deadline (30s for the live demo, 24h in the time-skipping test); analyst approve as a signal. (Cut 5)
+- Checkout client that calls Update-With-Start and can resend the same order ID; mock gateway card that always declines. (Cut 6)
+- Custom search attribute `OrderStatus`, upserted as the workflow moves (also answers status when no worker is running). (Cut 7)
+

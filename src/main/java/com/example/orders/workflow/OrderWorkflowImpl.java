@@ -46,6 +46,11 @@ public class OrderWorkflowImpl implements OrderWorkflow {
     private final FraudActivities fraud = Workflow.newActivityStub(FraudActivities.class, options);
     private final ShippingActivities shipping = Workflow.newActivityStub(ShippingActivities.class, options);
 
+    // Undo steps get their own stubs so the UI's event history labels them as compensation.
+    private final PaymentActivities voidHold = compensation(PaymentActivities.class, "void card hold");
+    private final InventoryActivities releaseStock = compensation(InventoryActivities.class, "release stock");
+    private final ShippingActivities cancelShipment = compensation(ShippingActivities.class, "cancel shipment");
+
     private OrderStatus status = OrderStatus.PLACED;
     private Boolean reviewApproved; // null until the analyst decides
     private boolean cancelRequested;
@@ -64,7 +69,7 @@ public class OrderWorkflowImpl implements OrderWorkflow {
     public OrderStatus placeOrder(OrderRequest order) {
         setStatus(OrderStatus.PLACED);
         Reservation reservation = inventory.reserve(order);
-        saga.addCompensation(inventory::release, order.orderId(), reservation);
+        saga.addCompensation(releaseStock::release, order.orderId(), reservation);
         setStatus(OrderStatus.STOCK_RESERVED);
 
         Authorization authorization = payment.authorize(order);
@@ -72,7 +77,7 @@ public class OrderWorkflowImpl implements OrderWorkflow {
             checkoutResult = CheckoutResult.DECLINED; // answered while the customer can still try another card
             return rollBack(OrderStatus.PAYMENT_DECLINED);
         }
-        saga.addCompensation(payment::voidAuthorization, order.orderId(), authorization);
+        saga.addCompensation(voidHold::voidAuthorization, order.orderId(), authorization);
         setStatus(OrderStatus.PAYMENT_AUTHORIZED);
         checkoutResult = CheckoutResult.PLACED; // checkout can now answer; the rest continues in the background
 
@@ -103,7 +108,7 @@ public class OrderWorkflowImpl implements OrderWorkflow {
         } catch (ActivityFailure e) {
             return rollBack(OrderStatus.SHIPMENT_FAILED);
         }
-        saga.addCompensation(shipping::cancelBooking, order.orderId(), booking);
+        saga.addCompensation(cancelShipment::cancelBooking, order.orderId(), booking);
         setStatus(OrderStatus.SHIPMENT_BOOKED);
 
         try {
@@ -163,6 +168,10 @@ public class OrderWorkflowImpl implements OrderWorkflow {
         Workflow.upsertTypedSearchAttributes(ORDER_STATUS.valueSet(newStatus.name()));
     }
 
+    private <T> T compensation(Class<T> activities, String summary) {
+        return Workflow.newActivityStub(activities, ActivityOptions.newBuilder(options).setSummary("Compensation: " + summary).build());
+    }
+
     private static Duration reviewDeadline(OrderRequest order) {
         return order.reviewDeadlineSeconds() > 0 ? Duration.ofSeconds(order.reviewDeadlineSeconds()) : DEFAULT_REVIEW_DEADLINE;
     }
@@ -170,6 +179,10 @@ public class OrderWorkflowImpl implements OrderWorkflow {
     /** Undoes every completed step (in reverse order), then ends the order. */
     private OrderStatus rollBack(OrderStatus finalStatus) {
         closing = true;
+        // Versioned: orders that rolled back before this status existed must replay without it.
+        if (Workflow.getVersion("rolling-back-status", Workflow.DEFAULT_VERSION, 1) >= 1) {
+            setStatus(OrderStatus.ROLLING_BACK);
+        }
         saga.compensate();
         return finish(finalStatus);
     }

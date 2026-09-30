@@ -9,11 +9,20 @@ import com.example.orders.mocks.MockServicesApp;
 import com.example.orders.model.LineItem;
 import com.example.orders.model.OrderRequest;
 import io.temporal.api.enums.v1.IndexedValueType;
+import io.temporal.common.interceptors.WorkerInterceptorBase;
+import io.temporal.common.interceptors.WorkflowInboundCallsInterceptor;
+import io.temporal.common.interceptors.WorkflowInboundCallsInterceptorBase;
+import io.temporal.common.interceptors.WorkflowOutboundCallsInterceptor;
+import io.temporal.common.interceptors.WorkflowOutboundCallsInterceptorBase;
+import io.temporal.testing.TestEnvironmentOptions;
 import io.temporal.testing.TestWorkflowEnvironment;
 import io.temporal.worker.Worker;
+import io.temporal.worker.WorkerFactoryOptions;
+import io.temporal.workflow.Workflow;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -26,12 +35,20 @@ final class OrderTestHarness implements AutoCloseable {
     private final MockServicesApp mocks;
     private final MockServicesClient client;
     private final TestWorkflowEnvironment env;
+    private final List<ScheduledActivity> scheduled = Collections.synchronizedList(new ArrayList<>());
+
+    /** An activity the workflow asked the Temporal Service to run, with the summary the UI shows for it. */
+    record ScheduledActivity(String name, String summary) {}
 
     OrderTestHarness() throws IOException {
         mocks = MockServicesApp.startOn(0);
         client = new MockServicesClient("http://localhost:" + mocks.port(), Duration.ofSeconds(1));
 
-        env = TestWorkflowEnvironment.newInstance();
+        env = TestWorkflowEnvironment.newInstance(TestEnvironmentOptions.newBuilder()
+                .setWorkerFactoryOptions(WorkerFactoryOptions.newBuilder()
+                        .setWorkerInterceptors(new ScheduledActivityRecorder())
+                        .build())
+                .build());
         env.registerSearchAttribute(OrderWorkflow.ORDER_STATUS.getName(), IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD);
         Worker worker = env.newWorker(OrderWorkflow.TASK_QUEUE);
         worker.registerWorkflowImplementationTypes(OrderWorkflowImpl.class);
@@ -51,6 +68,13 @@ final class OrderTestHarness implements AutoCloseable {
     String searchableStatus(String orderId) {
         return env.getWorkflowClient().newUntypedWorkflowStub(OrderWorkflow.workflowId(orderId))
                 .describe().getTypedSearchAttributes().get(OrderWorkflow.ORDER_STATUS);
+    }
+
+    /** Every activity scheduled so far, in order, as the workflow sent it (replays not counted twice). */
+    List<ScheduledActivity> scheduledActivities() {
+        synchronized (scheduled) {
+            return List.copyOf(scheduled);
+        }
     }
 
     /** Advances test time (skipped, not waited) — e.g. to just before a deadline. */
@@ -89,5 +113,26 @@ final class OrderTestHarness implements AutoCloseable {
     public void close() {
         env.close();
         mocks.stop();
+    }
+
+    /** Sees each activity call on its way from the workflow to the Temporal Service, with its options. */
+    private final class ScheduledActivityRecorder extends WorkerInterceptorBase {
+        @Override
+        public WorkflowInboundCallsInterceptor interceptWorkflow(WorkflowInboundCallsInterceptor next) {
+            return new WorkflowInboundCallsInterceptorBase(next) {
+                @Override
+                public void init(WorkflowOutboundCallsInterceptor outbound) {
+                    super.init(new WorkflowOutboundCallsInterceptorBase(outbound) {
+                        @Override
+                        public <R> ActivityOutput<R> executeActivity(ActivityInput<R> input) {
+                            if (!Workflow.isReplaying()) {
+                                scheduled.add(new ScheduledActivity(input.getActivityName(), input.getOptions().getSummary()));
+                            }
+                            return super.executeActivity(input);
+                        }
+                    });
+                }
+            };
+        }
     }
 }
